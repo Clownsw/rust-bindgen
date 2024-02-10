@@ -19,7 +19,7 @@ use super::module::{Module, ModuleKind};
 use super::template::{TemplateInstantiation, TemplateParameters};
 use super::traversal::{self, Edge, ItemTraversal};
 use super::ty::{FloatKind, Type, TypeKind};
-use crate::clang::{self, Cursor};
+use crate::clang::{self, ABIKind, Cursor};
 use crate::codegen::CodegenError;
 use crate::BindgenOptions;
 use crate::{Entry, HashMap, HashSet};
@@ -36,7 +36,7 @@ use std::mem;
 #[derive(Debug, Copy, Clone, Eq, PartialOrd, Ord, Hash)]
 pub(crate) struct ItemId(usize);
 
-/// Declare a newtype around `ItemId` with convesion methods.
+/// Declare a newtype around `ItemId` with conversion methods.
 macro_rules! item_id_newtype {
     (
         $( #[$attr:meta] )*
@@ -624,6 +624,11 @@ If you encounter an error missing from this list, please file an issue or a PR!"
     /// translation.
     pub(crate) fn target_pointer_size(&self) -> usize {
         self.target_info.pointer_width / 8
+    }
+
+    /// Returns the ABI, which is mostly useful for determining the mangling kind.
+    pub(crate) fn abi_kind(&self) -> ABIKind {
+        self.target_info.abi
     }
 
     /// Get the stack of partially parsed types that we are in the middle of

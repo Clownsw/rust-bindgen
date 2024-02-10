@@ -148,21 +148,19 @@ fn compare_generated_header(
     {
         let mut expectation = expectation.clone();
 
-        if cfg!(feature = "__testing_only_libclang_9") {
+        if cfg!(feature = "__testing_only_libclang_16") {
+            expectation.push("libclang-16");
+        } else if cfg!(feature = "__testing_only_libclang_9") {
             expectation.push("libclang-9");
-        } else if cfg!(feature = "__testing_only_libclang_5") {
-            expectation.push("libclang-5");
         } else {
             match clang_version().parsed {
-                None => expectation.push("libclang-9"),
+                None => expectation.push("libclang-16"),
                 Some(version) => {
                     let (maj, min) = version;
-                    let version_str = if maj >= 9 {
+                    let version_str = if maj >= 16 {
+                        "16".to_owned()
+                    } else if maj >= 9 {
                         "9".to_owned()
-                    } else if maj >= 5 {
-                        "5".to_owned()
-                    } else if maj >= 4 {
-                        "4".to_owned()
                     } else {
                         format!("{}.{}", maj, min)
                     };
@@ -392,7 +390,7 @@ fn test_clang_env_args() {
             "test.hpp",
             "#ifdef _ENV_ONE\nextern const int x[] = { 42 };\n#endif\n\
              #ifdef _ENV_TWO\nextern const int y[] = { 42 };\n#endif\n\
-             #ifdef NOT_THREE\nextern const int z[] = { 42 };\n#endif\n",
+             #if defined NOT_THREE && NOT_THREE == 1\nextern const int z[] = { 42 };\n#endif\n",
         )
         .generate()
         .unwrap()
@@ -445,6 +443,42 @@ fn test_multiple_header_calls_in_builder() {
             "/tests/headers/func_ptr.h"
         ))
         .header(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/headers/char.h"))
+        .clang_arg("--target=x86_64-unknown-linux")
+        .generate()
+        .unwrap()
+        .to_string();
+
+    let actual = format_code(actual).unwrap();
+
+    let expected_filename = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/expectations/tests/test_multiple_header_calls_in_builder.rs"
+    );
+    let expected = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/expectations/tests/test_multiple_header_calls_in_builder.rs"
+    ));
+    let expected = format_code(expected).unwrap();
+
+    if actual != expected {
+        println!("Generated bindings differ from expected!");
+        error_diff_mismatch(
+            &actual,
+            &expected,
+            None,
+            Path::new(expected_filename),
+        )
+        .unwrap();
+    }
+}
+
+#[test]
+fn test_headers_call_in_builder() {
+    let actual = builder()
+        .headers([
+            concat!(env!("CARGO_MANIFEST_DIR"), "/tests/headers/func_ptr.h"),
+            concat!(env!("CARGO_MANIFEST_DIR"), "/tests/headers/char.h"),
+        ])
         .clang_arg("--target=x86_64-unknown-linux")
         .generate()
         .unwrap()

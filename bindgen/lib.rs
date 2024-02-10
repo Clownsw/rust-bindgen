@@ -144,7 +144,7 @@ impl CodegenConfig {
         self.contains(CodegenConfig::VARS)
     }
 
-    /// Returns true if methds should be generated.
+    /// Returns true if methods should be generated.
     pub fn methods(self) -> bool {
         self.contains(CodegenConfig::METHODS)
     }
@@ -440,13 +440,14 @@ impl Builder {
 
 impl BindgenOptions {
     fn build(&mut self) {
-        const REGEX_SETS_LEN: usize = 28;
+        const REGEX_SETS_LEN: usize = 29;
 
         let regex_sets: [_; REGEX_SETS_LEN] = [
             &mut self.blocklisted_types,
             &mut self.blocklisted_functions,
             &mut self.blocklisted_items,
             &mut self.blocklisted_files,
+            &mut self.blocklisted_vars,
             &mut self.opaque_types,
             &mut self.allowlisted_vars,
             &mut self.allowlisted_types,
@@ -483,6 +484,7 @@ impl BindgenOptions {
                     "--blocklist-function",
                     "--blocklist-item",
                     "--blocklist-file",
+                    "--blocklist-var",
                     "--opaque-type",
                     "--allowlist-type",
                     "--allowlist-function",
@@ -693,6 +695,11 @@ fn rust_to_clang_target(rust_target: &str) -> Box<str> {
         let mut clang_target = "riscv64-".to_owned();
         clang_target.push_str(rust_target.strip_prefix("riscv64gc-").unwrap());
         return clang_target.into();
+    } else if rust_target.starts_with("riscv64imac-") {
+        let mut clang_target = "riscv64-".to_owned();
+        clang_target
+            .push_str(rust_target.strip_prefix("riscv64imac-").unwrap());
+        return clang_target.into();
     } else if rust_target.ends_with("-espidf") {
         let mut clang_target =
             rust_target.strip_suffix("-espidf").unwrap().to_owned();
@@ -710,6 +717,11 @@ fn rust_to_clang_target(rust_target: &str) -> Box<str> {
         let mut clang_target = "riscv32-".to_owned();
         clang_target
             .push_str(rust_target.strip_prefix("riscv32imac-").unwrap());
+        return clang_target.into();
+    } else if rust_target.starts_with("riscv32imafc-") {
+        let mut clang_target = "riscv32-".to_owned();
+        clang_target
+            .push_str(rust_target.strip_prefix("riscv32imafc-").unwrap());
         return clang_target.into();
     }
     rust_target.into()
@@ -1239,7 +1251,7 @@ fn get_target_dependent_env_var(
 /// use bindgen::builder;
 /// let bindings = builder()
 ///     .header("path/to/input/header")
-///     .parse_callbacks(Box::new(bindgen::CargoCallbacks))
+///     .parse_callbacks(Box::new(bindgen::CargoCallbacks::new()))
 ///     .generate();
 /// ```
 #[derive(Debug)]
@@ -1356,11 +1368,19 @@ fn test_rust_to_clang_target_riscv() {
         "riscv64-unknown-linux-gnu"
     );
     assert_eq!(
+        rust_to_clang_target("riscv64imac-unknown-none-elf").as_ref(),
+        "riscv64-unknown-none-elf"
+    );
+    assert_eq!(
         rust_to_clang_target("riscv32imc-unknown-none-elf").as_ref(),
         "riscv32-unknown-none-elf"
     );
     assert_eq!(
         rust_to_clang_target("riscv32imac-unknown-none-elf").as_ref(),
+        "riscv32-unknown-none-elf"
+    );
+    assert_eq!(
+        rust_to_clang_target("riscv32imafc-unknown-none-elf").as_ref(),
         "riscv32-unknown-none-elf"
     );
 }

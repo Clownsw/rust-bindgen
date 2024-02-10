@@ -222,6 +222,22 @@ options! {
         },
         as_args: "--blocklist-file",
     },
+    /// Variables that have been blocklisted and should not appear in the generated code.
+    blocklisted_vars: RegexSet {
+        methods: {
+            regex_option! {
+                /// Do not generate any bindings for the given variable.
+                ///
+                /// This option is not recursive, meaning that it will only block variables whose
+                /// names explicitly match the argument of this method.
+                pub fn blocklist_var<T: AsRef<str>>(mut self, arg: T) -> Builder {
+                    self.options.blocklisted_vars.insert(arg);
+                    self
+                }
+            }
+        },
+        as_args: "--blocklist-var",
+    },
     /// Types that should be treated as opaque structures in the generated code.
     opaque_types: RegexSet {
         methods: {
@@ -492,7 +508,7 @@ options! {
     constified_enums: RegexSet {
         methods: {
             regex_option! {
-                /// Mark the given `enum` as a set o integer constants.
+                /// Mark the given `enum` as a set of integer constants.
                 ///
                 /// This is similar to the [`Builder::constified_enum_module`] style, but the
                 /// constants are generated in the current module instead of in a new module.
@@ -1163,6 +1179,35 @@ options! {
                 self.options.input_headers.push(header.into().into_boxed_str());
                 self
             }
+
+            /// Add input C/C++ header(s) to generate bindings for.
+            ///
+            /// This can be used to generate bindings for a single header:
+            ///
+            /// ```ignore
+            /// let bindings = bindgen::Builder::default()
+            ///     .headers(["input.h"])
+            ///     .generate()
+            ///     .unwrap();
+            /// ```
+            ///
+            /// Or for multiple headers:
+            ///
+            /// ```ignore
+            /// let bindings = bindgen::Builder::default()
+            ///     .headers(["first.h", "second.h", "third.h"])
+            ///     .generate()
+            ///     .unwrap();
+            /// ```
+            pub fn headers<I: IntoIterator>(mut self, headers: I) -> Builder
+            where
+                I::Item: Into<String>,
+            {
+                self.options
+                    .input_headers
+                    .extend(headers.into_iter().map(Into::into).map(Into::into));
+                self
+            }
         },
         // This field is handled specially inside the macro.
         as_args: ignore,
@@ -1798,7 +1843,7 @@ options! {
         },
         as_args: "--dynamic-loading",
     },
-    /// Whether to equire successful linkage for all routines in a shared library.
+    /// Whether to require successful linkage for all routines in a shared library.
     dynamic_link_require_all: bool {
         methods: {
             /// Set whether to require successful linkage for all routines in a shared library.
@@ -1863,7 +1908,7 @@ options! {
         },
         as_args: "--c-naming",
     },
-    /// Wether to always emit explicit padding fields.
+    /// Whether to always emit explicit padding fields.
     force_explicit_padding: bool {
         methods: {
             /// Set whether to always emit explicit padding fields.

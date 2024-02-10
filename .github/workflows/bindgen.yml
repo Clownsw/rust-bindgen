@@ -7,6 +7,9 @@ on:
   pull_request:
     branches:
       - main
+  merge_group:
+    branches:
+      - main
 
 jobs:
   rustfmt-clippy:
@@ -142,7 +145,7 @@ jobs:
           - debian: null
             cross: null
             rust: null
-        llvm_version: ["5.0", "9.0"]
+        llvm_version: ["9.0", "16.0"]
         main_tests: [1]
         release_build: [0, 1]
         no_default_features: [0, 1]
@@ -155,7 +158,7 @@ jobs:
           # Test with extra asserts + docs just with latest llvm versions to
           # prevent explosion
           - os: ubuntu-latest
-            llvm_version: "9.0"
+            llvm_version: "16.0"
             release_build: 0
             no_default_features: 0
             feature_extra_asserts: 1
@@ -169,12 +172,15 @@ jobs:
           #     debian: arm64
           #     cross: aarch64-linux-gnu
           #     rust: aarch64-unknown-linux-gnu
-          #   llvm_version: "9.0"
+          #   llvm_version: "16.0"
           #   main_tests: 0
           #   release_build: 0
           #   feature_extra_asserts: 0
 
           # Ensure stuff works on macos too
+          # FIXME: Ideally should use the latest llvm version, but llvm doesn't
+          # provide releases for x86-64 macOS anymore which is what the runner uses.
+          #
           - os: macos-latest
             llvm_version: "9.0"
             release_build: 0
@@ -251,3 +257,18 @@ jobs:
           curl -L https://github.com/rust-lang/mdBook/releases/download/v0.4.5/mdbook-v0.4.5-x86_64-unknown-linux-gnu.tar.gz | tar xz
           ./mdbook build book
           ./mdbook test book
+
+  # One job that "summarizes" the success state of this pipeline. This can then
+  # be added to branch protection, rather than having to add each job
+  # separately.
+  success:
+    runs-on: ubuntu-latest
+    needs: [rustfmt-clippy, msrv, minimal, docs, quickchecking, test-expectations, test, check-cfg, test-book]
+    # GitHub branch protection is exceedingly silly and treats "jobs skipped
+    # because a dependency failed" as success. So we have to do some
+    # contortions to ensure the job fails if any of its dependencies fails.
+    if: always() # make sure this is never "skipped"
+    steps:
+      # Manually check the status of all dependencies. `if: failure()` does not work.
+      - name: check if any dependency failed
+        run: jq --exit-status 'all(.result == "success")' <<< '${{ toJson(needs) }}'
