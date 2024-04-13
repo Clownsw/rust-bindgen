@@ -96,7 +96,10 @@ macro_rules! define_rust_targets {
 define_rust_targets! {
     Nightly => {
         vectorcall_abi,
+        ptr_metadata: #81513,
+        layout_for_ptr: #69835,
     },
+    Stable_1_77(77) => { offset_of: #106655 },
     Stable_1_73(73) => { thiscall_abi: #42202 },
     Stable_1_71(71) => { c_unwind_abi: #106075 },
     Stable_1_68(68) => { abi_efiapi: #105795 },
@@ -230,7 +233,6 @@ impl Default for RustFeatures {
 
 #[cfg(test)]
 mod test {
-    #![allow(unused_imports)]
     use super::*;
 
     #[test]

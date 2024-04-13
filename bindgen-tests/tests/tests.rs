@@ -1,9 +1,3 @@
-extern crate bindgen;
-extern crate clap;
-#[cfg(feature = "logging")]
-extern crate env_logger;
-extern crate shlex;
-
 use bindgen::{clang_version, Builder};
 use owo_colors::{OwoColorize, Style};
 use similar::{ChangeTag, TextDiff};
@@ -654,7 +648,7 @@ fn build_flags_output_helper(builder: &bindgen::Builder) {
 
     let flags_quoted: Vec<String> = command_line_flags
         .iter()
-        .map(|x| format!("{}", shlex::quote(x)))
+        .map(|x| format!("{}", shlex::try_quote(x).unwrap()))
         .collect();
     let flags_str = flags_quoted.join(" ");
     println!("{}", flags_str);
