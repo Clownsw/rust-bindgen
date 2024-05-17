@@ -14,6 +14,7 @@ use std::fs::OpenOptions;
 use std::hash::Hash;
 use std::hash::Hasher;
 use std::os::raw::{c_char, c_int, c_longlong, c_uint, c_ulong, c_ulonglong};
+use std::sync::OnceLock;
 use std::{mem, ptr, slice};
 
 /// Type representing a clang attribute.
@@ -1528,13 +1529,13 @@ impl Type {
     pub(crate) fn is_associated_type(&self) -> bool {
         // This is terrible :(
         fn hacky_parse_associated_type<S: AsRef<str>>(spelling: S) -> bool {
-            lazy_static! {
-                static ref ASSOC_TYPE_RE: regex::Regex = regex::Regex::new(
-                    r"typename type\-parameter\-\d+\-\d+::.+"
-                )
-                .unwrap();
-            }
-            ASSOC_TYPE_RE.is_match(spelling.as_ref())
+            static ASSOC_TYPE_RE: OnceLock<regex::Regex> = OnceLock::new();
+            ASSOC_TYPE_RE
+                .get_or_init(|| {
+                    regex::Regex::new(r"typename type\-parameter\-\d+\-\d+::.+")
+                        .unwrap()
+                })
+                .is_match(spelling.as_ref())
         }
 
         self.kind() == CXType_Unexposed &&
@@ -1609,7 +1610,7 @@ impl SourceLocation {
             let mut line = 0;
             let mut col = 0;
             let mut off = 0;
-            clang_getSpellingLocation(
+            clang_getFileLocation(
                 self.x, &mut file, &mut line, &mut col, &mut off,
             );
             (File { x: file }, line as usize, col as usize, off as usize)
@@ -1907,7 +1908,8 @@ impl Drop for TranslationUnit {
 /// Translation unit used for macro fallback parsing
 pub(crate) struct FallbackTranslationUnit {
     file_path: String,
-    pch_paths: Vec<String>,
+    header_path: String,
+    pch_path: String,
     idx: Box<Index>,
     tu: TranslationUnit,
 }
@@ -1922,7 +1924,8 @@ impl FallbackTranslationUnit {
     /// Create a new fallback translation unit
     pub(crate) fn new(
         file: String,
-        pch_paths: Vec<String>,
+        header_path: String,
+        pch_path: String,
         c_args: &[Box<str>],
     ) -> Option<Self> {
         // Create empty file
@@ -1943,7 +1946,8 @@ impl FallbackTranslationUnit {
         )?;
         Some(FallbackTranslationUnit {
             file_path: file,
-            pch_paths,
+            header_path,
+            pch_path,
             tu: f_translation_unit,
             idx: f_index,
         })
@@ -1981,9 +1985,8 @@ impl FallbackTranslationUnit {
 impl Drop for FallbackTranslationUnit {
     fn drop(&mut self) {
         let _ = std::fs::remove_file(&self.file_path);
-        for pch in self.pch_paths.iter() {
-            let _ = std::fs::remove_file(pch);
-        }
+        let _ = std::fs::remove_file(&self.header_path);
+        let _ = std::fs::remove_file(&self.pch_path);
     }
 }
 
@@ -2355,7 +2358,7 @@ impl EvalResult {
 
         if unsafe { clang_EvalResult_isUnsignedInt(self.x) } != 0 {
             let value = unsafe { clang_EvalResult_getAsUnsigned(self.x) };
-            if value > i64::max_value() as c_ulonglong {
+            if value > i64::MAX as c_ulonglong {
                 return None;
             }
 
@@ -2363,10 +2366,10 @@ impl EvalResult {
         }
 
         let value = unsafe { clang_EvalResult_getAsLongLong(self.x) };
-        if value > i64::max_value() as c_longlong {
+        if value > i64::MAX as c_longlong {
             return None;
         }
-        if value < i64::min_value() as c_longlong {
+        if value < i64::MIN as c_longlong {
             return None;
         }
         #[allow(clippy::unnecessary_cast)]

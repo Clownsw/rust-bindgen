@@ -19,8 +19,6 @@
 #[macro_use]
 extern crate bitflags;
 #[macro_use]
-extern crate lazy_static;
-#[macro_use]
 extern crate quote;
 
 #[cfg(feature = "logging")]
@@ -77,6 +75,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::rc::Rc;
 use std::str::FromStr;
+use std::sync::{Arc, OnceLock};
 
 // Some convenient typedefs for a fast hash map and hash set.
 type HashMap<K, V> = rustc_hash::FxHashMap<K, V>;
@@ -617,17 +616,14 @@ fn ensure_libclang_is_loaded() {
     // doesn't get dropped prematurely, nor is loaded multiple times
     // across different threads.
 
-    lazy_static! {
-        static ref LIBCLANG: std::sync::Arc<clang_sys::SharedLibrary> = {
-            clang_sys::load().expect("Unable to find libclang");
-            clang_sys::get_library().expect(
-                "We just loaded libclang and it had better still be \
-                 here!",
-            )
-        };
-    }
+    static LIBCLANG: OnceLock<Arc<clang_sys::SharedLibrary>> = OnceLock::new();
+    let libclang = LIBCLANG.get_or_init(|| {
+        clang_sys::load().expect("Unable to find libclang");
+        clang_sys::get_library()
+            .expect("We just loaded libclang and it had better still be here!")
+    });
 
-    clang_sys::set_library(Some(LIBCLANG.clone()));
+    clang_sys::set_library(Some(libclang.clone()));
 }
 
 #[cfg(not(feature = "runtime"))]
@@ -686,45 +682,31 @@ pub(crate) const HOST_TARGET: &str =
 // Some architecture triplets are different between rust and libclang, see #1211
 // and duplicates.
 fn rust_to_clang_target(rust_target: &str) -> Box<str> {
-    if rust_target.starts_with("aarch64-apple-") {
-        let mut clang_target = "arm64-apple-".to_owned();
-        clang_target
-            .push_str(rust_target.strip_prefix("aarch64-apple-").unwrap());
-        return clang_target.into();
-    } else if rust_target.starts_with("riscv64gc-") {
-        let mut clang_target = "riscv64-".to_owned();
-        clang_target.push_str(rust_target.strip_prefix("riscv64gc-").unwrap());
-        return clang_target.into();
-    } else if rust_target.starts_with("riscv64imac-") {
-        let mut clang_target = "riscv64-".to_owned();
-        clang_target
-            .push_str(rust_target.strip_prefix("riscv64imac-").unwrap());
-        return clang_target.into();
-    } else if rust_target.ends_with("-espidf") {
-        let mut clang_target =
-            rust_target.strip_suffix("-espidf").unwrap().to_owned();
-        clang_target.push_str("-elf");
-        if clang_target.starts_with("riscv32imc-") {
-            clang_target = "riscv32-".to_owned() +
-                clang_target.strip_prefix("riscv32imc-").unwrap();
-        }
-        return clang_target.into();
-    } else if rust_target.starts_with("riscv32imc-") {
-        let mut clang_target = "riscv32-".to_owned();
-        clang_target.push_str(rust_target.strip_prefix("riscv32imc-").unwrap());
-        return clang_target.into();
-    } else if rust_target.starts_with("riscv32imac-") {
-        let mut clang_target = "riscv32-".to_owned();
-        clang_target
-            .push_str(rust_target.strip_prefix("riscv32imac-").unwrap());
-        return clang_target.into();
-    } else if rust_target.starts_with("riscv32imafc-") {
-        let mut clang_target = "riscv32-".to_owned();
-        clang_target
-            .push_str(rust_target.strip_prefix("riscv32imafc-").unwrap());
-        return clang_target.into();
+    const TRIPLE_HYPHENS_MESSAGE: &str = "Target triple should contain hyphens";
+
+    let mut clang_target = rust_target.to_owned();
+
+    if clang_target.starts_with("riscv32") {
+        let idx = clang_target.find('-').expect(TRIPLE_HYPHENS_MESSAGE);
+
+        clang_target.replace_range(..idx, "riscv32");
+    } else if clang_target.starts_with("riscv64") {
+        let idx = clang_target.find('-').expect(TRIPLE_HYPHENS_MESSAGE);
+
+        clang_target.replace_range(..idx, "riscv64");
+    } else if clang_target.starts_with("aarch64-apple-") {
+        let idx = clang_target.find('-').expect(TRIPLE_HYPHENS_MESSAGE);
+
+        clang_target.replace_range(..idx, "arm64");
     }
-    rust_target.into()
+
+    if clang_target.ends_with("-espidf") {
+        let idx = clang_target.rfind('-').expect(TRIPLE_HYPHENS_MESSAGE);
+
+        clang_target.replace_range((idx + 1).., "elf");
+    }
+
+    clang_target.into()
 }
 
 /// Returns the effective target, and whether it was explicitly specified on the
@@ -983,14 +965,6 @@ impl Bindings {
         if let Ok(rustfmt) = env::var("RUSTFMT") {
             return Ok(Cow::Owned(rustfmt.into()));
         }
-        #[cfg(feature = "which-rustfmt")]
-        match which::which("rustfmt") {
-            Ok(p) => Ok(Cow::Owned(p)),
-            Err(e) => {
-                Err(io::Error::new(io::ErrorKind::Other, format!("{}", e)))
-            }
-        }
-        #[cfg(not(feature = "which-rustfmt"))]
         // No rustfmt binary was specified, so assume that the binary is called
         // "rustfmt" and that it is in the user's PATH.
         Ok(Cow::Owned("rustfmt".into()))
@@ -1381,6 +1355,10 @@ fn test_rust_to_clang_target_riscv() {
     );
     assert_eq!(
         rust_to_clang_target("riscv32imafc-unknown-none-elf").as_ref(),
+        "riscv32-unknown-none-elf"
+    );
+    assert_eq!(
+        rust_to_clang_target("riscv32i-unknown-none-elf").as_ref(),
         "riscv32-unknown-none-elf"
     );
 }

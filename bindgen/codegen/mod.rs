@@ -53,7 +53,7 @@ use crate::ir::ty::{Type, TypeKind};
 use crate::ir::var::Var;
 
 use proc_macro2::{Ident, Span};
-use quote::TokenStreamExt;
+use quote::{ToTokens, TokenStreamExt};
 
 use crate::{Entry, HashMap, HashSet};
 use std::borrow::Cow;
@@ -799,7 +799,17 @@ impl CodeGenerator for Var {
                 }
             );
 
-            result.push(tokens);
+            if ctx.options().dynamic_library_name.is_some() {
+                result.dynamic_items().push_var(
+                    canonical_ident,
+                    self.ty()
+                        .to_rust_ty_or_opaque(ctx, &())
+                        .into_token_stream(),
+                    ctx.options().dynamic_link_require_all,
+                );
+            } else {
+                result.push(tokens);
+            }
         }
     }
 }
@@ -2598,7 +2608,7 @@ impl CodeGenerator for CompInfo {
                 ctx,
                 &canonical_ident,
                 flex_inner_ty,
-                &*generic_param_names,
+                &generic_param_names,
                 &impl_generics_labels,
             ));
         }
@@ -3000,7 +3010,7 @@ impl Method {
 }
 
 /// A helper type that represents different enum variations.
-#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+#[derive(Copy, Clone, PartialEq, Eq, Debug, Default)]
 pub enum EnumVariation {
     /// The code for this enum will use a Rust enum. Note that creating this in unsafe code
     /// (including FFI) with an invalid value will invoke undefined behaviour, whether or not
@@ -3017,6 +3027,7 @@ pub enum EnumVariation {
         is_global: bool,
     },
     /// The code for this enum will use consts
+    #[default]
     Consts,
     /// The code for this enum will use a module containing consts
     ModuleConsts,
@@ -3031,12 +3042,6 @@ impl EnumVariation {
     /// true.
     fn is_const(&self) -> bool {
         matches!(*self, EnumVariation::Consts | EnumVariation::ModuleConsts)
-    }
-}
-
-impl Default for EnumVariation {
-    fn default() -> EnumVariation {
-        EnumVariation::Consts
     }
 }
 
@@ -3747,11 +3752,12 @@ impl CodeGenerator for Enum {
 }
 
 /// Enum for the default type of macro constants.
-#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+#[derive(Copy, Clone, PartialEq, Eq, Debug, Default)]
 pub enum MacroTypeVariation {
     /// Use i32 or i64
     Signed,
     /// Use u32 or u64
+    #[default]
     Unsigned,
 }
 
@@ -3762,12 +3768,6 @@ impl fmt::Display for MacroTypeVariation {
             Self::Unsigned => "unsigned",
         };
         s.fmt(f)
-    }
-}
-
-impl Default for MacroTypeVariation {
-    fn default() -> MacroTypeVariation {
-        MacroTypeVariation::Unsigned
     }
 }
 
@@ -3791,9 +3791,10 @@ impl std::str::FromStr for MacroTypeVariation {
 }
 
 /// Enum for how aliases should be translated.
-#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+#[derive(Copy, Clone, PartialEq, Eq, Debug, Default)]
 pub enum AliasVariation {
     /// Convert to regular Rust alias
+    #[default]
     TypeAlias,
     /// Create a new type by wrapping the old type in a struct and using #[repr(transparent)]
     NewType,
@@ -3810,12 +3811,6 @@ impl fmt::Display for AliasVariation {
         };
 
         s.fmt(f)
-    }
-}
-
-impl Default for AliasVariation {
-    fn default() -> AliasVariation {
-        AliasVariation::TypeAlias
     }
 }
 
@@ -4576,7 +4571,7 @@ impl CodeGenerator for Function {
             let args_identifiers =
                 utils::fnsig_argument_identifiers(ctx, signature);
             let ret_ty = utils::fnsig_return_ty(ctx, signature);
-            result.dynamic_items().push(
+            result.dynamic_items().push_func(
                 ident,
                 abi,
                 signature.is_variadic(),
