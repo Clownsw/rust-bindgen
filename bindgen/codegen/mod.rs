@@ -20,7 +20,9 @@ use self::struct_layout::StructLayoutTracker;
 
 use super::BindgenOptions;
 
-use crate::callbacks::{DeriveInfo, FieldInfo, TypeKind as DeriveTypeKind};
+use crate::callbacks::{
+    AttributeInfo, DeriveInfo, FieldInfo, TypeKind as DeriveTypeKind,
+};
 use crate::codegen::error::Error;
 use crate::ir::analysis::{HasVtable, Sizedness};
 use crate::ir::annotations::{
@@ -1047,6 +1049,19 @@ impl CodeGenerator for Type {
                             .extend(custom_derives.iter().map(|s| s.as_str()));
                         attributes.push(attributes::derives(&derives));
 
+                        let custom_attributes =
+                            ctx.options().all_callbacks(|cb| {
+                                cb.add_attributes(&AttributeInfo {
+                                    name: &name,
+                                    kind: DeriveTypeKind::Struct,
+                                })
+                            });
+                        attributes.extend(
+                            custom_attributes
+                                .iter()
+                                .map(|s| s.parse().unwrap()),
+                        );
+
                         quote! {
                             #( #attributes )*
                             pub struct #rust_name
@@ -1313,6 +1328,7 @@ impl CodeGenerator for TemplateInstantiation {
                 // #size_of_expr < #size, the subtraction will overflow, both
                 // of which print enough information to see what has gone wrong.
                 result.push(quote! {
+                    #[allow(clippy::unnecessary_operation, clippy::identity_op)]
                     const _: () = {
                         [#size_of_err][#size_of_expr - #size];
                         [#align_of_err][#align_of_expr - #align];
@@ -1658,13 +1674,13 @@ fn access_specifier(
 
 /// Compute a fields or structs visibility based on multiple conditions.
 /// 1. If the element was declared public, and we respect such CXX accesses specs
-/// (context option) => By default Public, but this can be overruled by an `annotation`.
+///    (context option) => By default Public, but this can be overruled by an `annotation`.
 ///
 /// 2. If the element was declared private, and we respect such CXX accesses specs
-/// (context option) => By default Private, but this can be overruled by an `annotation`.
+///    (context option) => By default Private, but this can be overruled by an `annotation`.
 ///
 /// 3. If we do not respect visibility modifiers, the result depends on the `annotation`,
-/// if any, or the passed `default_kind`.
+///    if any, or the passed `default_kind`.
 ///
 fn compute_visibility(
     ctx: &BindgenContext,
@@ -1792,6 +1808,7 @@ impl<'a> FieldCodegen<'a> for BitfieldUnit {
                 methods,
                 (
                     &unit_field_name,
+                    &unit_field_ty,
                     &mut bitfield_representable_as_int,
                     &mut bitfield_visibility,
                 ),
@@ -1849,6 +1866,15 @@ fn bitfield_getter_name(
     quote! { #name }
 }
 
+fn bitfield_raw_getter_name(
+    ctx: &BindgenContext,
+    bitfield: &Bitfield,
+) -> proc_macro2::TokenStream {
+    let name = bitfield.getter_name();
+    let name = ctx.rust_ident_raw(format!("{name}_raw"));
+    quote! { #name }
+}
+
 fn bitfield_setter_name(
     ctx: &BindgenContext,
     bitfield: &Bitfield,
@@ -1858,8 +1884,22 @@ fn bitfield_setter_name(
     quote! { #setter }
 }
 
+fn bitfield_raw_setter_name(
+    ctx: &BindgenContext,
+    bitfield: &Bitfield,
+) -> proc_macro2::TokenStream {
+    let setter = bitfield.setter_name();
+    let setter = ctx.rust_ident_raw(format!("{setter}_raw"));
+    quote! { #setter }
+}
+
 impl<'a> FieldCodegen<'a> for Bitfield {
-    type Extra = (&'a str, &'a mut bool, &'a mut FieldVisibilityKind);
+    type Extra = (
+        &'a str,
+        &'a syn::Type,
+        &'a mut bool,
+        &'a mut FieldVisibilityKind,
+    );
 
     fn codegen<F, M>(
         &self,
@@ -1873,8 +1913,14 @@ impl<'a> FieldCodegen<'a> for Bitfield {
         struct_layout: &mut StructLayoutTracker,
         _fields: &mut F,
         methods: &mut M,
-        (unit_field_name, bitfield_representable_as_int, bitfield_visibility): (
+        (
+            unit_field_name,
+            unit_field_ty,
+            bitfield_representable_as_int,
+            bitfield_visibility,
+        ): (
             &'a str,
+            &'a syn::Type,
             &mut bool,
             &'a mut FieldVisibilityKind,
         ),
@@ -1885,6 +1931,8 @@ impl<'a> FieldCodegen<'a> for Bitfield {
         let prefix = ctx.trait_prefix();
         let getter_name = bitfield_getter_name(ctx, self);
         let setter_name = bitfield_setter_name(ctx, self);
+        let raw_getter_name = bitfield_raw_getter_name(ctx, self);
+        let raw_setter_name = bitfield_raw_setter_name(ctx, self);
         let unit_field_ident = Ident::new(unit_field_name, Span::call_site());
 
         let bitfield_ty_item = ctx.resolve_item(self.ty());
@@ -1951,6 +1999,30 @@ impl<'a> FieldCodegen<'a> for Bitfield {
                         )
                     }
                 }
+
+                #[inline]
+                #access_spec unsafe fn #raw_getter_name(this: *const Self) -> #bitfield_ty {
+                    unsafe {
+                        ::#prefix::mem::transmute(<#unit_field_ty>::raw_get(
+                            (*::#prefix::ptr::addr_of!((*this).#unit_field_ident)).as_ref() as *const _,
+                            #offset,
+                            #width,
+                        ) as #bitfield_int_ty)
+                    }
+                }
+
+                #[inline]
+                #access_spec unsafe fn #raw_setter_name(this: *mut Self, val: #bitfield_ty) {
+                    unsafe {
+                        let val: #bitfield_int_ty = ::#prefix::mem::transmute(val);
+                        <#unit_field_ty>::raw_set(
+                            (*::#prefix::ptr::addr_of_mut!((*this).#unit_field_ident)).as_mut() as *mut _,
+                            #offset,
+                            #width,
+                            val as u64,
+                        )
+                    }
+                }
             }));
         } else {
             methods.extend(Some(quote! {
@@ -1972,6 +2044,30 @@ impl<'a> FieldCodegen<'a> for Bitfield {
                             #offset,
                             #width,
                             val as u64
+                        )
+                    }
+                }
+
+                #[inline]
+                #access_spec unsafe fn #raw_getter_name(this: *const Self) -> #bitfield_ty {
+                    unsafe {
+                        ::#prefix::mem::transmute(<#unit_field_ty>::raw_get(
+                            ::#prefix::ptr::addr_of!((*this).#unit_field_ident),
+                            #offset,
+                            #width,
+                        ) as #bitfield_int_ty)
+                    }
+                }
+
+                #[inline]
+                #access_spec unsafe fn #raw_setter_name(this: *mut Self, val: #bitfield_ty) {
+                    unsafe {
+                        let val: #bitfield_int_ty = ::#prefix::mem::transmute(val);
+                        <#unit_field_ty>::raw_set(
+                            ::#prefix::ptr::addr_of_mut!((*this).#unit_field_ident),
+                            #offset,
+                            #width,
+                            val as u64,
                         )
                     }
                 }
@@ -2377,6 +2473,25 @@ impl CodeGenerator for CompInfo {
             attributes.push(attributes::derives(&derives))
         }
 
+        attributes.extend(
+            item.annotations()
+                .attributes()
+                .iter()
+                .map(|s| s.parse().unwrap()),
+        );
+
+        let custom_attributes = ctx.options().all_callbacks(|cb| {
+            cb.add_attributes(&AttributeInfo {
+                name: &canonical_name,
+                kind: if is_rust_union {
+                    DeriveTypeKind::Union
+                } else {
+                    DeriveTypeKind::Struct
+                },
+            })
+        });
+        attributes.extend(custom_attributes.iter().map(|s| s.parse().unwrap()));
+
         if item.must_use(ctx) {
             attributes.push(attributes::must_use());
         }
@@ -2523,6 +2638,7 @@ impl CodeGenerator for CompInfo {
 
                     if compile_time {
                         result.push(quote! {
+                            #[allow(clippy::unnecessary_operation, clippy::identity_op)]
                             const _: () = {
                                 [#size_of_err][#size_of_expr - #size];
                                 #check_struct_align
@@ -2723,7 +2839,7 @@ impl CompInfo {
                 pub fn layout(len: usize) -> ::#prefix::alloc::Layout {
                     // SAFETY: Null pointers are OK if we don't deref them
                     unsafe {
-                        let p: *const Self = ::#prefix::ptr::from_raw_parts(::#prefix::ptr::null(), len);
+                        let p: *const Self = ::#prefix::ptr::from_raw_parts(::#prefix::ptr::null::<()>(), len);
                         ::#prefix::alloc::Layout::for_value_raw(p)
                     }
                 }
@@ -3567,6 +3683,23 @@ impl CodeGenerator for Enum {
             });
             // In most cases this will be a no-op, since custom_derives will be empty.
             derives.extend(custom_derives.iter().map(|s| s.as_str()));
+
+            attrs.extend(
+                item.annotations()
+                    .attributes()
+                    .iter()
+                    .map(|s| s.parse().unwrap()),
+            );
+
+            // The custom attribute callback may return a list of attributes;
+            // add them to the end of the list.
+            let custom_attributes = ctx.options().all_callbacks(|cb| {
+                cb.add_attributes(&AttributeInfo {
+                    name: &name,
+                    kind: DeriveTypeKind::Enum,
+                })
+            });
+            attrs.extend(custom_attributes.iter().map(|s| s.parse().unwrap()));
 
             attrs.push(attributes::derives(&derives));
         }
@@ -4617,11 +4750,11 @@ fn unsupported_abi_diagnostic(
                 fn_name,
                 error
             ),
-            Level::Warn,
+            Level::Warning,
         )
         .add_annotation(
             "No code will be generated for this function.",
-            Level::Warn,
+            Level::Warning,
         )
         .add_annotation(
             format!(
@@ -4665,7 +4798,7 @@ fn variadic_fn_diagnostic(
 
         let mut diag = Diagnostic::default();
 
-        diag.with_title(format!("Cannot generate wrapper for the static function `{}`.", fn_name), Level::Warn)
+        diag.with_title(format!("Cannot generate wrapper for the static function `{}`.", fn_name), Level::Warning)
             .add_annotation("The `--wrap-static-fns` feature does not support variadic functions.", Level::Note)
             .add_annotation("No code will be generated for this function.", Level::Note);
 
@@ -5017,6 +5150,7 @@ pub(crate) fn codegen(
 }
 
 pub(crate) mod utils {
+    use super::helpers::BITFIELD_UNIT;
     use super::serialize::CSerialize;
     use super::{error, CodegenError, CodegenResult, ToRustTyOrOpaque};
     use crate::ir::context::BindgenContext;
@@ -5153,6 +5287,12 @@ pub(crate) mod utils {
         ctx: &BindgenContext,
         result: &mut Vec<proc_macro2::TokenStream>,
     ) {
+        if ctx.options().blocklisted_items.matches(BITFIELD_UNIT) ||
+            ctx.options().blocklisted_types.matches(BITFIELD_UNIT)
+        {
+            return;
+        }
+
         let bitfield_unit_src = include_str!("./bitfield_unit.rs");
         let bitfield_unit_src = if ctx.options().rust_features().min_const_fn {
             Cow::Borrowed(bitfield_unit_src)
